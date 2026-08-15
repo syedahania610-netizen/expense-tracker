@@ -1,10 +1,13 @@
-import { db } from './index.ts';
+import { getDb } from './index.ts';
 import { transactions, budgets, subscriptions, users } from './schema.ts';
 import { eq, desc, and } from 'drizzle-orm';
 import { Transaction, Budget, RecurringSubscription } from '../types.ts';
 
 // TRANSACTIONS
 export async function getUserTransactions(userUid: string): Promise<Transaction[]> {
+  const db = getDb();
+  if (!db) return [];
+
   try {
     const rows = await db
       .select()
@@ -28,11 +31,14 @@ export async function getUserTransactions(userUid: string): Promise<Transaction[
     }));
   } catch (error) {
     console.error('Failed to query user transactions:', error);
-    throw new Error('Failed to retrieve transactions from database.', { cause: error });
+    return [];
   }
 }
 
 export async function upsertUserTransaction(userUid: string, tx: Transaction): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     const existing = await db.select().from(transactions).where(and(eq(transactions.id, tx.id), eq(transactions.userId, userUid))).limit(1);
     if (existing.length > 0) {
@@ -68,43 +74,51 @@ export async function upsertUserTransaction(userUid: string, tx: Transaction): P
     }
   } catch (error) {
     console.error('Failed to upsert transaction:', error);
-    throw new Error('Failed to save transaction to database.', { cause: error });
   }
 }
 
 export async function deleteUserTransaction(userUid: string, txId: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     await db.delete(transactions).where(and(eq(transactions.id, txId), eq(transactions.userId, userUid)));
   } catch (error) {
     console.error('Failed to delete transaction:', error);
-    throw new Error('Failed to delete transaction.', { cause: error });
   }
 }
 
 export async function bulkDeleteUserTransactions(userUid: string, txIds: string[]): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     for (const id of txIds) {
       await db.delete(transactions).where(and(eq(transactions.id, id), eq(transactions.userId, userUid)));
     }
   } catch (error) {
     console.error('Failed to bulk delete transactions:', error);
-    throw new Error('Failed to perform bulk deletion.', { cause: error });
   }
 }
 
 export async function bulkInsertTransactions(userUid: string, txList: Transaction[]): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     for (const tx of txList) {
       await upsertUserTransaction(userUid, tx);
     }
   } catch (error) {
     console.error('Failed to bulk insert transactions:', error);
-    throw new Error('Failed to import transactions.', { cause: error });
   }
 }
 
 // BUDGETS
 export async function getUserBudgets(userUid: string): Promise<Budget[]> {
+  const db = getDb();
+  if (!db) return [];
+
   try {
     const rows = await db.select().from(budgets).where(eq(budgets.userId, userUid));
     return rows.map((r) => ({
@@ -114,11 +128,14 @@ export async function getUserBudgets(userUid: string): Promise<Budget[]> {
     }));
   } catch (error) {
     console.error('Failed to get budgets:', error);
-    throw new Error('Failed to retrieve budgets.', { cause: error });
+    return [];
   }
 }
 
 export async function upsertUserBudget(userUid: string, budget: Budget): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     const categoryKey = budget.categoryId || 'overall';
     const existing = await db
@@ -144,12 +161,14 @@ export async function upsertUserBudget(userUid: string, budget: Budget): Promise
     }
   } catch (error) {
     console.error('Failed to update budget:', error);
-    throw new Error('Failed to update budget.', { cause: error });
   }
 }
 
 // SUBSCRIPTIONS
 export async function getUserSubscriptions(userUid: string): Promise<RecurringSubscription[]> {
+  const db = getDb();
+  if (!db) return [];
+
   try {
     const rows = await db.select().from(subscriptions).where(eq(subscriptions.userId, userUid));
     return rows.map((r) => ({
@@ -164,11 +183,14 @@ export async function getUserSubscriptions(userUid: string): Promise<RecurringSu
     }));
   } catch (error) {
     console.error('Failed to get subscriptions:', error);
-    throw new Error('Failed to retrieve recurring subscriptions.', { cause: error });
+    return [];
   }
 }
 
 export async function upsertUserSubscription(userUid: string, sub: RecurringSubscription): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     const existing = await db
       .select()
@@ -203,25 +225,28 @@ export async function upsertUserSubscription(userUid: string, sub: RecurringSubs
     }
   } catch (error) {
     console.error('Failed to update subscription:', error);
-    throw new Error('Failed to update subscription.', { cause: error });
   }
 }
 
 export async function deleteUserSubscription(userUid: string, subId: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     await db.delete(subscriptions).where(and(eq(subscriptions.id, subId), eq(subscriptions.userId, userUid)));
   } catch (error) {
     console.error('Failed to delete subscription:', error);
-    throw new Error('Failed to delete subscription.', { cause: error });
   }
 }
 
 // USER SETTINGS
 export async function updateUserCurrency(userUid: string, currency: string): Promise<void> {
+  const db = getDb();
+  if (!db) return;
+
   try {
     await db.update(users).set({ currency, updatedAt: new Date() }).where(eq(users.uid, userUid));
   } catch (error) {
     console.error('Failed to update currency:', error);
-    throw new Error('Failed to update user currency.', { cause: error });
   }
 }

@@ -1,6 +1,6 @@
 -- ==============================================================================
--- Supabase / PostgreSQL Schema for Expense Tracker App
--- Run this entire script in Supabase SQL Editor (https://supabase.com/dashboard/project/_/sql)
+-- Supabase / PostgreSQL Idempotent Schema for Expense Tracker App
+-- Safe to re-run multiple times in Supabase SQL Editor
 -- ==============================================================================
 
 -- 1. Create Users Table
@@ -63,13 +63,19 @@ CREATE INDEX IF NOT EXISTS idx_transactions_date ON public.transactions(date DES
 CREATE INDEX IF NOT EXISTS idx_budgets_user_id ON public.budgets(user_id);
 CREATE INDEX IF NOT EXISTS idx_subscriptions_user_id ON public.subscriptions(user_id);
 
--- 6. Enable Row Level Security (RLS) & Public / Anon Access Policies for direct Client Access
+-- 6. Enable Row Level Security (RLS)
 ALTER TABLE public.users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.budgets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.subscriptions ENABLE ROW LEVEL SECURITY;
 
--- Allow read/write access via Supabase anon key & authenticated roles
+-- 7. Drop existing policies if they already exist (avoids 42710 error)
+DROP POLICY IF EXISTS "Allow anon and auth all on users" ON public.users;
+DROP POLICY IF EXISTS "Allow anon and auth all on transactions" ON public.transactions;
+DROP POLICY IF EXISTS "Allow anon and auth all on budgets" ON public.budgets;
+DROP POLICY IF EXISTS "Allow anon and auth all on subscriptions" ON public.subscriptions;
+
+-- 8. Create Policies for Read/Write Access
 CREATE POLICY "Allow anon and auth all on users" ON public.users FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon and auth all on transactions" ON public.transactions FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
 CREATE POLICY "Allow anon and auth all on budgets" ON public.budgets FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);

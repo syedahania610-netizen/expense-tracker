@@ -1,0 +1,6 @@
+{
+  "name": "Minimalist Expense Tracker",
+  "description": "A modern, minimalist expense tracking application with dark mode support, real-time analytics, budgeting, and quick entry designed for peak efficiency.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

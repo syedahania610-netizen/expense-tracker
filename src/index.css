@@ -1,0 +1,10 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  body {
+    @apply antialiased text-zinc-900 bg-zinc-50 dark:text-zinc-100 dark:bg-zinc-950;
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  }
+}

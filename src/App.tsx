@@ -13,6 +13,7 @@ import {
   INITIAL_SUBSCRIPTIONS 
 } from './data/defaultData';
 import { filterTransactions } from './utils/formatters';
+import { AuthProvider, useAuth } from './context/AuthContext';
 
 import { Header } from './components/Header';
 import { MetricCards } from './components/MetricCards';
@@ -27,7 +28,10 @@ import { ExportImportModal } from './components/ExportImportModal';
 import { DeployModal } from './components/DeployModal';
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal';
 
-export default function App() {
+function MainApp() {
+  const { user, idToken, getIdToken } = useAuth();
+  const [isSyncing, setIsSyncing] = useState(false);
+
   // 1. Theme State & Storage
   const [theme, setTheme] = useState<ThemeMode>(() => {
     const saved = localStorage.getItem('app_theme');
@@ -35,7 +39,6 @@ export default function App() {
     return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
   });
 
-  // Apply dark mode class to document
   useEffect(() => {
     const root = document.documentElement;
     if (theme === 'dark') {
@@ -55,14 +58,28 @@ export default function App() {
     return localStorage.getItem('app_currency') || '$';
   });
 
-  useEffect(() => {
-    localStorage.setItem('app_currency', currency);
-  }, [currency]);
+  const handleSetCurrency = async (newCurr: string) => {
+    setCurrency(newCurr);
+    localStorage.setItem('app_currency', newCurr);
+    if (user) {
+      const token = await getIdToken();
+      if (token) {
+        fetch('/api/user/currency', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${token}`,
+          },
+          body: JSON.stringify({ currency: newCurr }),
+        }).catch(console.error);
+      }
+    }
+  };
 
   // 3. Navigation Tab State
   const [activeTab, setActiveTab] = useState<ActiveTab>('transactions');
 
-  // 4. Data State (Persistent)
+  // 4. Data State
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
     const saved = localStorage.getItem('app_transactions');
     if (saved) {
@@ -93,6 +110,87 @@ export default function App() {
     return INITIAL_SUBSCRIPTIONS;
   });
 
+  // Fetch data from PostgreSQL whenever user signs in
+  useEffect(() => {
+    async function loadServerData() {
+      if (!user) return;
+      try {
+        setIsSyncing(true);
+        const token = await getIdToken();
+        if (!token) return;
+
+        // Fetch transactions, budgets, subscriptions concurrently
+        const [txRes, bRes, sRes] = await Promise.all([
+          fetch('/api/transactions', { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('/api/budgets', { headers: { 'Authorization': `Bearer ${token}` } }),
+          fetch('/api/subscriptions', { headers: { 'Authorization': `Bearer ${token}` } }),
+        ]);
+
+        if (txRes.ok) {
+          const txData = await txRes.json();
+          if (txData.transactions && txData.transactions.length > 0) {
+            setTransactions(txData.transactions);
+            localStorage.setItem('app_transactions', JSON.stringify(txData.transactions));
+          } else {
+            // First time user: seed initial local data to PostgreSQL
+            await fetch('/api/transactions/bulk-import', {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`,
+              },
+              body: JSON.stringify({ transactions }),
+            });
+          }
+        }
+
+        if (bRes.ok) {
+          const bData = await bRes.json();
+          if (bData.budgets && bData.budgets.length > 0) {
+            setBudgets(bData.budgets);
+            localStorage.setItem('app_budgets', JSON.stringify(bData.budgets));
+          } else {
+            for (const b of budgets) {
+              await fetch('/api/budgets', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify(b),
+              });
+            }
+          }
+        }
+
+        if (sRes.ok) {
+          const sData = await sRes.json();
+          if (sData.subscriptions && sData.subscriptions.length > 0) {
+            setSubscriptions(sData.subscriptions);
+            localStorage.setItem('app_subscriptions', JSON.stringify(sData.subscriptions));
+          } else {
+            for (const s of subscriptions) {
+              await fetch('/api/subscriptions', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': `Bearer ${token}`,
+                },
+                body: JSON.stringify(s),
+              });
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Error fetching PostgreSQL data:', err);
+      } finally {
+        setIsSyncing(false);
+      }
+    }
+
+    loadServerData();
+  }, [user]);
+
   // Sync data to localStorage
   useEffect(() => {
     localStorage.setItem('app_transactions', JSON.stringify(transactions));
@@ -116,7 +214,6 @@ export default function App() {
     sortBy: 'date_desc',
   });
 
-  // Filtered transactions computed
   const displayedTransactions = filterTransactions(transactions, filters);
   const totalFilteredAmount = displayedTransactions.reduce((sum, t) => {
     return t.type === 'expense' ? sum + t.amount : sum;
@@ -128,22 +225,74 @@ export default function App() {
   const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
   const [isKeyboardModalOpen, setIsKeyboardModalOpen] = useState(false);
 
-  // 7. Transaction Actions
-  const handleAddTransaction = (txData: Omit<Transaction, 'id' | 'createdAt'>) => {
+  // 7. Transaction Actions with PostgreSQL Persistence
+  const handleAddTransaction = async (txData: Omit<Transaction, 'id' | 'createdAt'>) => {
     const newTx: Transaction = {
       ...txData,
       id: `tx-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       createdAt: Date.now(),
     };
     setTransactions(prev => [newTx, ...prev]);
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/transactions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(newTx),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to sync new transaction:', e);
+      }
+    }
   };
 
-  const handleUpdateTransaction = (updated: Transaction) => {
+  const handleUpdateTransaction = async (updated: Transaction) => {
     setTransactions(prev => prev.map(t => t.id === updated.id ? updated : t));
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/transactions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(updated),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to update transaction on server:', e);
+      }
+    }
   };
 
-  const handleDeleteTransaction = (id: string) => {
+  const handleDeleteTransaction = async (id: string) => {
     setTransactions(prev => prev.filter(t => t.id !== id));
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch(`/api/transactions/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to delete transaction on server:', e);
+      }
+    }
   };
 
   const handleDuplicateTransaction = (tx: Transaction) => {
@@ -154,15 +303,33 @@ export default function App() {
       date: new Date().toISOString().split('T')[0],
       createdAt: Date.now(),
     };
-    setTransactions(prev => [dup, ...prev]);
+    handleAddTransaction(dup);
   };
 
-  const handleBulkDelete = (ids: string[]) => {
+  const handleBulkDelete = async (ids: string[]) => {
     setTransactions(prev => prev.filter(t => !ids.includes(t.id)));
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/transactions/bulk-delete', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({ ids }),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to bulk delete on server:', e);
+      }
+    }
   };
 
   // Budget Actions
-  const handleUpdateBudget = (budgetToUpdate: Budget) => {
+  const handleUpdateBudget = async (budgetToUpdate: Budget) => {
     setBudgets(prev => {
       const exists = prev.some(b => b.categoryId === budgetToUpdate.categoryId);
       if (exists) {
@@ -170,28 +337,119 @@ export default function App() {
       }
       return [...prev, budgetToUpdate];
     });
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/budgets', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(budgetToUpdate),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to update budget on server:', e);
+      }
+    }
   };
 
   // Subscription Actions
-  const handleAddSubscription = (subData: Omit<RecurringSubscription, 'id'>) => {
+  const handleAddSubscription = async (subData: Omit<RecurringSubscription, 'id'>) => {
     const newSub: RecurringSubscription = {
       ...subData,
       id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
     };
     setSubscriptions(prev => [newSub, ...prev]);
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/subscriptions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(newSub),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to save subscription to server:', e);
+      }
+    }
   };
 
-  const handleToggleSubscriptionActive = (id: string) => {
-    setSubscriptions(prev => prev.map(s => s.id === id ? { ...s, active: !s.active } : s));
+  const handleToggleSubscriptionActive = async (id: string) => {
+    const sub = subscriptions.find(s => s.id === id);
+    if (!sub) return;
+    const updated = { ...sub, active: !sub.active };
+    setSubscriptions(prev => prev.map(s => s.id === id ? updated : s));
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/subscriptions', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify(updated),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to toggle subscription on server:', e);
+      }
+    }
   };
 
-  const handleDeleteSubscription = (id: string) => {
+  const handleDeleteSubscription = async (id: string) => {
     setSubscriptions(prev => prev.filter(s => s.id !== id));
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch(`/api/subscriptions/${id}`, {
+            method: 'DELETE',
+            headers: {
+              'Authorization': `Bearer ${token}`,
+            },
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to delete subscription on server:', e);
+      }
+    }
   };
 
   // Data import / reset
-  const handleImportTransactions = (imported: Transaction[]) => {
+  const handleImportTransactions = async (imported: Transaction[]) => {
     setTransactions(prev => [...imported, ...prev]);
+
+    if (user) {
+      try {
+        const token = await getIdToken();
+        if (token) {
+          fetch('/api/transactions/bulk-import', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`,
+            },
+            body: JSON.stringify({ transactions: imported }),
+          }).catch(console.error);
+        }
+      } catch (e) {
+        console.error('Failed to import on server:', e);
+      }
+    }
   };
 
   const handleResetData = () => {
@@ -202,7 +460,6 @@ export default function App() {
 
   // 8. Global Keyboard Shortcuts
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
-    // Ignore hotkeys when typing in input, textarea or select
     const target = e.target as HTMLElement;
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName)) {
       if (e.key === 'Escape') {
@@ -261,7 +518,7 @@ export default function App() {
         theme={theme}
         toggleTheme={toggleTheme}
         currency={currency}
-        setCurrency={setCurrency}
+        setCurrency={handleSetCurrency}
         onOpenNewTx={() => {
           setActiveTab('transactions');
           setTimeout(() => {
@@ -272,6 +529,7 @@ export default function App() {
         onOpenExportModal={() => setIsExportModalOpen(true)}
         onOpenKeyboardModal={() => setIsKeyboardModalOpen(true)}
         onOpenDeployModal={() => setIsDeployModalOpen(true)}
+        isSyncing={isSyncing}
       />
 
       {/* Main Container */}
@@ -383,5 +641,13 @@ export default function App() {
       />
 
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <MainApp />
+    </AuthProvider>
   );
 }

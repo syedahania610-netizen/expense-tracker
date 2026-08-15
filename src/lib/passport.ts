@@ -18,12 +18,15 @@ export interface AppUser {
 
 // Configure Passport Google Strategy if credentials are present
 if (googleClientId && googleClientSecret) {
+  const baseUrl = process.env.APP_URL ? process.env.APP_URL.replace(/\/$/, '') : '';
+  const callbackURL = baseUrl ? `${baseUrl}/api/auth/google/callback` : '/api/auth/google/callback';
+
   passport.use(
     new GoogleStrategy(
       {
         clientID: googleClientId,
         clientSecret: googleClientSecret,
-        callbackURL: '/api/auth/google/callback',
+        callbackURL,
       },
       (accessToken, refreshToken, profile, done) => {
         const user: AppUser = {
